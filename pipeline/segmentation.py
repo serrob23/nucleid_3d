@@ -1,11 +1,6 @@
-import os
 import numpy as np
-from copy import deepcopy
-import skimage as sk
 from skimage.morphology import disk
 import skimage.filters as ft
-import copy
-import h5py
 import torch
 from skimage.exposure import equalize_adapthist
 import warnings
