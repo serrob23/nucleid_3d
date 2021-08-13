@@ -8,45 +8,149 @@ from skimage.morphology import remove_small_objects
 import pandas as pd
 
 
-def getObjectProperties(labeled_image):
-
+def std_intensity(regionmask, intensity):
     """
-    Returns labeled object properties in a pandas DataFrame for convienient
-    sorting.
-
-
+    Returns  standard deviation of intensity region
+    
+    
     Parameters
     ----------
-
-    labled_image : 3D numpy array
-        Segmented image of nuclei where each individual object has been
-        assigned a unique integer idea.
-
-
+    
+    regionmask : ndarray
+        Labeled mask for object region, required by extra_properties
+        in regionprops_table.
+    
+    intensity : ndarray
+        corresponding intensity image for masked region
+        
+    
     Returns
     -------
-
-    object_props : pd.DataFrame
-        DataFrame object with selected properties extracted using
-        skimage.measure.regionprops_table
-
-
-
+    
+    std : float
+        standard deviation via numpy
+    
     """
 
-    # object properties for extraction
-    properties = ['equivalent_diameter', 'inertia_tensor',
-                  'inertia_tensor_eigvals', 'major_axis_length',
-                  'minor_axis_length', 'moments',
-                  'moments_central', 'label', 'area',
-                  'solidity', 'feret_diameter_max'
-                  'moments_normalized', 'centroid', 'bbox',
-                  'bbox_area', 'extent',
-                  'convex_area', 'convex_image']
+    return np.std(intensity)
 
-    # extract features and return as dataframe
-    object_props = pd.DataFrame(regionprops_table(labeled_image,
-                                                  properties=properties))
+def var_intensity(regionmask, intensity):
+    """
+    Returns variance of intensity region
+    
+    
+    Parameters
+    ----------
+    
+    regionmask : ndarray
+        Labeled mask for object region, required by extra_properties
+        in regionprops_table.
+    
+    intensity : ndarray
+        corresponding intensity image for masked region
+        
+    
+    Returns
+    -------
+    
+    var : float
+        variance via numpy
+    
+    """
+    return np.var(intensity)
+
+def entropy_intensity(regionmask, intensity):
+    """
+    Returns shannon entropy of intensity region
+    
+    
+    Parameters
+    ----------
+    
+    regionmask : ndarray
+        Labeled mask for object region, required by extra_properties
+        in regionprops_table.
+    
+    intensity : ndarray
+        corresponding intensity image for masked region
+        
+    
+    Returns
+    -------
+    
+    entropy : float
+        shannon entropy via skimage.measure
+    """
+    
+    return shannon_entropy(intensity)
+
+def surface_area(regionmask):
+    
+    #pad with zeros to prevent holes at edges
+    regionmask = np.pad(regionmask, [(1,1),(1,1),(1,1)], 'constant')
+    
+    #fill holes to generate solid object
+    structure = np.ones((3,) * regionmask.ndim)
+    filled_image = ndi.binary_fill_holes(regionmask, structure)
+    
+    #get mesh surface of object
+    verts, faces, normals, values = marching_cubes(filled_image, mask=filled_image)
+    
+    #return mesh surface area
+    return mesh_surface_area(verts, faces)
+    
+
+def getObjectProperties(labeled_image, intensity_image):
+    
+    """
+    Returns labeled object properties in a pandas DataFrame for convienient sorting.
+    
+    
+    Parameters 
+    ----------
+    
+    labled_image : 3D numpy array
+        Segmented image of nuclei where each individual object has been assigned a 
+        unique integer idea.
+        
+        
+    intensity_image : 3D numpy array
+        3D intensity image of nuclei, assumed np.uint16.
+        
+    
+    Returns
+    -------
+    
+    object_props : pd.DataFrame
+        DataFrame object with selected properties extracted using skimage.measure.regionprops_table
+    
+    
+    
+    """
+    
+    #object properties for extraction
+    properties=[ 'equivalent_diameter', 'inertia_tensor_eigvals', 
+                'major_axis_length', 'minor_axis_length', 
+                'label', 'area',
+                'solidity', 'feret_diameter_max', 
+                'centroid', 'bbox', 
+                'bbox_area', 'extent',
+                'convex_area', 'min_intensity',
+                'max_intensity', 'mean_intensity',
+                'extent','image', 'intensity_image']
+    
+    #extract features and return as dataframe
+    object_props = pd.DataFrame(regionprops_table(labeled_image, 
+                                                  intensity_image=intensity_image, 
+                                                  properties=properties,
+                                                  extra_properties = (std_intensity, 
+                                                                      var_intensity,
+                                                                      entropy_intensity,
+                                                                      surface_area)))
+    
+    object_props = object_props[object_props.columns.difference(['image', 
+                                                                'intensity_image'])]
+    
     return object_props
 
 
