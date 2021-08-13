@@ -60,3 +60,53 @@ def preProcessImage(image, radius=2):
     med_image = (equalize_adapthist(med_image.astype(np.uint16))*image.max())
 
     return med_image.astype(np.uint16)
+
+
+def runWorkflow(rootdir, filename, dirname, im_range = 500):
+    """
+    Runs full pipeline workflow for nuclear segmentation
+    
+    
+    Parameters
+    ----------
+    
+    rootdir : str or pathlike
+        Root directory for data
+        
+    
+    filename : str
+        Hdf5 file for processing. Assumed to have standard file structure with
+    nuclear channel as ch00
+    
+    
+    dirname : str
+        Directory name for saving results. Will be within rootdir path, does not 
+    need to exist.
+    
+    im_range : int, default 500
+        First dimension image size to load into memory.
+    
+    
+    """
+    
+    
+    
+    data_file = os.path.join(rootdir, filename)
+
+
+    savedir = os.path.join(rootdir, dirname)
+    if not os.path.exists(savedir):
+        os.mkdir(savedir)
+
+    f = h5py.File(data_file,'r')
+    print(f['t00000/s00/0/cells'].shape, f['t00000/s00/0/cells'].dtype)
+
+    for i in range(0,f['t00000/s00/0/cells'].shape[0],im_range):
+        filename = os.path.join(savedir, 'region1_x_{:0>6d}_{:0>6d}_diam17.tif'.format(i,i+im_range))
+        print(filename)
+        image = f['t00000/s00/0/cells'][i:i+im_range].astype(np.uint16)
+        image = preProcessImage(image)
+        masks = Pipeline(image,diameter=17,do_3D=True, net_avg=True, batch_size = 6, flow=.4)
+        sk.io.imsave(filename,masks)
+        del masks
+    return
