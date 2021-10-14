@@ -2,10 +2,15 @@ import os, json, glob
 import numpy as np
 import copy
 from scipy.spatial import Delaunay, Voronoi
+import scipy.ndimage as ndi
+import scipy.stats as stat
 from skimage.io import imread
 from skimage.measure import regionprops_table
 from skimage.morphology import remove_small_objects
+from skimage.measure import regionprops, regionprops_table, shannon_entropy, marching_cubes, mesh_surface_area
+from skimage.morphology import remove_small_objects
 import pandas as pd
+import h5py as h5
 
 
 def std_intensity(regionmask, intensity):
@@ -279,48 +284,263 @@ def cropImage(image, image_props, object_label, clean=False):
         crop = (crop > 0).astype(int)
     return crop
 
+def fullworkflow(mask_filename,
+                 h5_filename,
+                 z_range,
+                 xy_range=None,
+                 min_size=150):
+    
+    """
+    Run full feature extraction workfloww on segmented masks and 
+    3D intensity data. Saves features to csv file.
+    
+    
+    Parameters
+    ----------
+    
+    mask_filename : str or pathlike
+        Path to segmented mask file, assumed tif.
+        
+    h5_filename : str or pathlike
+        Path to intensity image  file, assumed hdf5.
+        
+    z_range : tuple
+        Tuple of ints for z range to read intensity data from
+    h5 file.
+    
+    xy_range : None or tuple
+        Tuple for xy coordinates to read intenstity data from
+    a particular section of h5 file in the other two dimmensions. 
+    
+    min_size : int
+        Default is 150. Minimum object size for masks, used for
+    remove_small_objects from skimage.
 
-def fullworkflow(filename, min_size=150, return_objects=False):
+    Returns
+    -------
+    
+    
+    """
+    
+    print('Reading masks from:', mask_filename)
+    mask = imread(mask_filename)
 
-    data = imread(filename)
+    print('Removing small objects from mask')
+    mask = remove_small_objects(mask, min_size=min_size)
+    
+    print('Mask datatype:', mask.dtype)
+    
+    print('Reading intensity data from: \n %s, \n z-range %s'%(h5_filename, z_range))
+    f = h5.File(h5_filename,'r')
+    
+    if xy_range is None:
+        intensity_image = f['t00000/s00/0/cells'][z_range[0]:z_range[1]]
+    
+    else: 
+        x_range = xy_range[0]
+        y_range = xy_range[1]
+        intensity_image = f['t00000/s00/0/cells'][z_range[0]:z_range[1],
+                                                  x_range[0]:x_range[1],
+                                                  y_range[0]:y_range[1]]
+    f.close()
+    
+    print('Exctracting features')
+    properties = getObjectProperties(mask, intensity_image)
+    
+    properties = getPropertyDescriptors(properties)
+    
 
-    data = remove_small_objects(data, min_size=min_size)
-
-    properties = getObjectProperties(data)
-
-    centroids = getCentroids(properties)
-
-    tesselD, tesselV = getTesselations(centroids['centroids'])
-
-    graphs = {'delaunay': tesselD.__dict__,
-              'voronoi': tesselV.__dict__}
-
-    for gkey, gvalue in graphs.items():
-        for key, value in gvalue.items():
-
-            if type(value) == np.ndarray:
-                graphs[gkey][key] = value.tolist()
-
-    savedir = filename.split('.tif')[0] + '_features'
+    savedir = mask_filename.split('.tif')[0] + '_features'
 
     if not os.path.exists(savedir):
         os.mkdir(savedir)
 
+    print('Saving data')
     prop_filename = os.path.join(savedir, 'region_properties.csv')
-    json_filename = os.path.join(savedir, 'graphs.json')
 
     properties.to_csv(prop_filename)
 
-    with open(json_filename, 'w') as f:
-        thestring = json.dumps(graphs)
-        json.dump(thestring, f, indent=4, sort_keys=True)
-    f.close()
+    return
 
-    if return_objects:
-        return properties, graphs
 
+def getPropertyDescriptors(properties):
+    """
+    Gets property descriptors for a set of object properties: (volume, inertia tensor eigenvalue 0, 
+    entropy intensity, convex_area, major axis length, minor axis length, surface area, solidity, extent)
+    for each property it will get: min/max, mean, variance, skewness, kurtosis. 
+
+
+    Parameters
+    ----------
+
+    properties : pandas dataframe
+        Pandas dataframe generated from getObjectProperties
+    
+    """
+
+    def describeProperty(properties, key):
+        """
+        Gets statistical descriptors from input data.
+
+        Parameters
+        ----------
+
+        properties : pandas dataframe
+            Pandas dataframe generated from getObjectProperties
+        
+        key : str
+            Column name in properties dataframe.
+
+        
+        Returns
+        -------
+
+        propdict : dict
+            Dictionary with key/value entries corresponding to statistical descriptors.
+        
+        """
+        propdict = {}
+        
+        propdict['nobs'], propdict['minmax'], propdict['mean'], \
+        propdict['var'], propdict['skew'], propdict['kurt'] = stat.describe(properties[key])
+        propdict['IQR'] = stat.iqr(properties['key'])
+        return propdict
+    
+    #volume descriptors
+    vol_props  = describeProperty(properties, 'area')
+    properties['vol_minmax'] = vol_props['minmax']
+    properties['vol_mean'] = vol_props['mean']
+    properties['vol_var'] = vol_props['var']
+    properties['vol_skew'] = vol_props['skew']
+    properties['vol_kurt'] = vol_props['kurt']
+    properties['vol_IQR'] = vol_props['IQR']
+    
+    #inertia tensor 0 descriptors
+    inertiaeig_props = describeProperty(properties, 'inertia_tensor_eigvals-0')
+    properties['inertia_tensor_0_minmax'] = inertiaeig_props['minmax']
+    properties['inertia_tensor_0_mean'] = inertiaeig_props['mean']
+    properties['inertia_tensor_0_var'] = inertiaeig_props['var']
+    properties['inertia_tensor_0_skew'] = inertiaeig_props['skew']
+    properties['inertia_tensor_0_kurt'] = inertiaeig_props['kurt']
+    properties['inertia_tensor_0_IQR'] = inertiaeig_props['IQR']
+    
+    #entropy descriptors
+    entropy_props = describeProperty(properties, 'entropy_intensity')
+    properties['entropy_minmax'] = entropy_props['minmax']
+    properties['entropy_mean'] = entropy_props['mean']
+    properties['entropy_var'] = entropy_props['var']
+    properties['entropy_skew'] = entropy_props['skew']
+    properties['entropy_kurt'] = entropy_props['kurt']
+    properties['entropy_IQR'] = entropy_props['IQR']
+    
+    #convex area descriptors
+    convex_props = describeProperty(properties, 'convex_area')
+    properties['convex_minmax'] = convex_props['minmax']
+    properties['convex_mean'] = convex_props['mean']
+    properties['convex_var'] = convex_props['var']
+    properties['convex_skew'] = convex_props['skew']
+    properties['convex_kurt'] = convex_props['kurt']
+    properties['convex_IQR'] = convex_props['IQR']
+    
+    #major axis length descriptors
+    major_props = describeProperty(properties, 'major_axis_length')
+    properties['major_axis_minmax'] = major_props['minmax']
+    properties['major_axis_mean'] = major_props['mean']
+    properties['major_axis_var'] = major_props['var']
+    properties['major_axis_skew'] = major_props['skew']
+    properties['major_axis_kurt'] = major_props['kurt']
+    properties['major_axis_IQR'] = major_props['IQR']
+    
+    #minor axis length descriptors
+    minor_props = describeProperty(properties, 'minor_axis_length')
+    properties['minor_axis_minmax'] = minor_props['minmax']
+    properties['minor_axis_mean'] = minor_props['mean']
+    properties['minor_axis_var'] = minor_props['var']
+    properties['minor_axis_skew'] = minor_props['skew']
+    properties['minor_axis_kurt'] = minor_props['kurt']
+    properties['minor_axis_IQR'] = minor_props['IQR']
+    
+    #surface area descriptors
+    SA_props = describeProperty(properties, 'surface_area')
+    properties['surface_area_minmax'] = SA_props['minmax']
+    properties['surface_area_mean'] = SA_props['mean']
+    properties['surface_area_var'] = SA_props['var']
+    properties['surface_area_skew'] = SA_props['skew']
+    properties['surface_area_kurt'] = SA_props['kurt']
+    properties['surface_area_IQR'] = 
+    
+    #solidity descriptors
+    solidity_props = describeProperty(properties, 'solidity')
+    properties['solidity_minmax'] = solidity_props['minmax']
+    properties['solidity_mean'] = solidity_props['mean']
+    properties['solidity_var'] = solidity_props['var']
+    properties['solidity_skew'] = solidity_props['skew']
+    properties['solidity_kurt'] = solidity_props['kurt']
+    properties['solidity_IQR'] = solidity_props['IQR']
+    
+    #extent descriptors
+    extent_props = describeProperty(properties, 'extent')
+    properties['extent_minmax'] = extent_props['minmax']
+    properties['extent_mean'] = extent_props['mean']
+    properties['extent_var'] = extent_props['var']
+    properties['extent_skew'] = extent_props['skew']
+    properties['extent_kurt'] = extent_props['kurt']
+    properties['extent_IQR'] = extent_props['IQR']
+    
+    
+    return properties
+    
+    
+def sortedWorkflow(rootdir, 
+                   segmentation_dir, 
+                   file_title=None,
+                   xy_range=None
+                  ):
+    """
+    Runs feature extraction workflow by sorting mask files in root directory.
+    
+    
+    Parameters
+    ----------
+    
+    rootdir : str or pathlike 
+        Root directory where 3D intensity data (assumed HDF5) and segmented mask directory
+    is stored.
+    
+    segmentation_dir : str or pathlike
+        Directory where segmented masks are stored. Assumed hierarchy is that segmentation_dir is
+    within rootdir.
+    
+    file_title : str or None (optional)
+        Default is none. File title for hdf5 file to read segmented data.
+        
+    
+    Returns
+    -------
+    
+    
+    """
+    
+    
+    
+    if file_title is None:
+        h5_file = glob.glob(rootdir + os.sep + '*.h5')
+    
     else:
-        return
+        h5_file = glob.glob(rootdir + os.sep + '*%s*.h5'%(file_title))
+        print(h5_file)
+    
+    segmented_files = sorted(glob.glob(rootdir + os.sep + segmentation_dir + os.sep + '*.tif'))
+    
+    
+    for file in segmented_files:
+        split_filename = file.split('_')
+        z_range = (int(split_filename[-3]),int(split_filename[-2]))
+        print(z_range)
+        
+        fullworkflow(file, h5_file[0], z_range, xy_range)
+    
+    compileProps(rootdir, 'complete_props.csv')
 
 
 def loadPropTable(filepath):
