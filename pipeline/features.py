@@ -403,7 +403,7 @@ def getPropertyDescriptors(properties):
         
         propdict['nobs'], propdict['minmax'], propdict['mean'], \
         propdict['var'], propdict['skew'], propdict['kurt'] = stat.describe(properties[key])
-        propdict['IQR'] = stat.iqr(properties['key'])
+        propdict['IQR'] = stat.iqr(properties[key])
         return propdict
     
     #volume descriptors
