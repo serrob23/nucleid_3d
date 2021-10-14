@@ -62,7 +62,7 @@ def preProcessImage(image, radius=2):
     return med_image.astype(np.uint16)
 
 
-def runWorkflow(rootdir, filename, dirname, im_range = 500):
+def runWorkflow(rootdir, filename, dirname, im_range = 500, z_start = 0, z_max = 4000):
     """
     Runs full pipeline workflow for nuclear segmentation
     
@@ -101,7 +101,9 @@ def runWorkflow(rootdir, filename, dirname, im_range = 500):
     f = h5py.File(data_file,'r')
     print(f['t00000/s00/0/cells'].shape, f['t00000/s00/0/cells'].dtype)
 
-    for i in range(0,f['t00000/s00/0/cells'].shape[0],im_range):
+    for i in range(z_start,f['t00000/s00/0/cells'].shape[0],im_range):
+        if i + im_range > z_max:
+            return
         filename = os.path.join(savedir, 'region1_x_{:0>6d}_{:0>6d}_diam17.tif'.format(i,i+im_range))
         print(filename)
         image = f['t00000/s00/0/cells'][i:i+im_range].astype(np.uint16)
